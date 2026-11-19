@@ -94,7 +94,7 @@ def mostrar_reportes_caja(parent, ciclo_activo):
     )
     detalle_frame.grid(row=1, column=0, sticky="w", padx=10, pady=10)
 
-    detalle_var1 = tk.StringVar(value="Usuario")
+    detalle_var1 = tk.StringVar(value="Folio + Alumnos + Concepto")
 
     cb_detalle = ttk.Combobox(
         detalle_frame,
@@ -104,7 +104,8 @@ def mostrar_reportes_caja(parent, ciclo_activo):
         values=[
             "Usuario",
             "Usuario + Alumnos",
-            "Usuario + Alumnos + Concepto"
+            "Usuario + Alumnos + Concepto",
+            "Folio + Alumnos + Concepto"
         ]
     )
     cb_detalle.pack(padx=10, pady=8)
@@ -593,15 +594,15 @@ def mostrar_reportes_caja(parent, ciclo_activo):
             cur.execute("""
                 SELECT e.id, e.nombre, e.apellido_paterno, e.apellido_materno
                 FROM Estudiantes e
-                JOIN DatosEscolares d ON d.estudiante_id = e.matricula
+                JOIN DatosEscolares d ON d.estudiante_id = e.id
                 WHERE d.ciclo_id = ?
-                ORDER BY e.apellido_paterno, e.apellido_materno, e.nombre
+                ORDER BY e.nombre, e.apellido_paterno, e.apellido_materno
             """, (ciclo_activo["id"],))
         else:
             cur.execute("""
                 SELECT id, nombre, apellido_paterno, apellido_materno
                 FROM Estudiantes
-                ORDER BY apellido_paterno, apellido_materno, nombre
+                ORDER BY nombre, apellido_paterno, apellido_materno
             """)
 
         rows = cur.fetchall()

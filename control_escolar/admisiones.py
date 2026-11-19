@@ -708,35 +708,6 @@ def mostrar_inscripcion(contenido, ciclo_activo):
             VALUES (?,?,?,?,?,?,?,?)
         """,(id_nuevo, calle, numero, estado, municipio, cp, tel_dir, colonia))
 
-        # =============================
-        # CREAR PAGOS DEL CICLO
-        # =============================
-        cargos = obtener_todos("""
-            SELECT id, monto, fecha_inicio
-            FROM Cargos
-            WHERE ciclo_id = ?
-            AND activo = 1
-            ORDER BY orden
-        """, (ciclo_activo["id"],))
-
-        for cargo_id, monto, fecha_inicio in cargos:
-            cur.execute("""
-                INSERT OR IGNORE INTO Pagos (
-                    estudiante_id,
-                    ciclo_id,
-                    cargo_id,
-                    monto,
-                    status
-                )
-                VALUES (?, ?, ?, ?, 'Pendiente')
-            """, (
-                id_nuevo,
-                ciclo_activo["id"],
-                cargo_id,
-                monto
-            ))
-
-
         conn.commit()
         conn.close()
 

@@ -884,35 +884,6 @@ def mostrar_ficha_alumno(id_alumno, contenido, ciclo_activo, modo="normal"):
                 condicion_val
             ))
 
-            # =============================
-            # CREAR PAGOS DEL CICLO
-            # =============================
-            cargos = obtener_todos("""
-                SELECT id, monto, fecha_inicio
-                FROM Cargos
-                WHERE ciclo_id = ?
-                AND activo = 1
-                ORDER BY orden
-            """, (ciclo_activo["id"],))
-
-            for cargo_id, monto, fecha_inicio in cargos:
-                cur.execute("""
-                    INSERT OR IGNORE INTO Pagos (
-                        estudiante_id,
-                        ciclo_id,
-                        cargo_id,
-                        monto,
-                        status
-                    )
-                    VALUES (?, ?, ?, ?, 'Pendiente')
-                """, (
-                    id_alumno,
-                    ciclo_activo["id"],
-                    cargo_id,
-                    monto
-                ))
-
-
             conn.commit()
             messagebox.showinfo(
                 "Éxito",
@@ -1056,7 +1027,6 @@ def mostrar_ficha_alumno(id_alumno, contenido, ciclo_activo, modo="normal"):
             cur.execute("DELETE FROM DatosFamiliares WHERE estudiante_id=?", (id_alumno,))
             cur.execute("DELETE FROM DatosGenerales WHERE estudiante_id=?", (id_alumno,))
             cur.execute("DELETE FROM DatosEscolares WHERE estudiante_id=?", (id_alumno,))
-            cur.execute("DELETE FROM Pagos WHERE estudiante_id=?", (id_alumno,))
 
             # Finalmente eliminar estudiante
             cur.execute("DELETE FROM Estudiantes WHERE id=?", (id_alumno,))

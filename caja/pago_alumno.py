@@ -326,19 +326,27 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
             IFNULL(p.monto_pagado, 0),
             IFNULL(p.condonacion, 0),
             IFNULL(p.descuento, 0),
-            IFNULL(p.recargos, NULL),
-            IFNULL(p.recargo_hasta, NULL),
+            p.recargos,
+            p.recargo_hasta,
             IFNULL(p.status, 'No pagado'),
             IFNULL(p.tipo_pago, '')
         FROM Cargos c
         LEFT JOIN Pagos p
-            ON p.cargo_id = c.id
-        AND p.estudiante_id = ?
-        AND p.ciclo_id = ?
+            ON p.id = (
+                SELECT p2.id
+                FROM Pagos p2
+                WHERE p2.cargo_id = c.id
+                AND p2.estudiante_id = ?
+                AND p2.ciclo_id = ?
+                AND COALESCE(p2.status, 'Pendiente') <> 'Cancelado'
+                ORDER BY p2.id DESC
+                LIMIT 1
+            )
         WHERE c.ciclo_id = ?
         AND c.activo = 1
         ORDER BY c.orden;
     """, (alumno_id, ciclo_activo["id"], ciclo_activo["id"]))
+
 
     # diccionario: { cargo_id: tipo_pago }
     seleccionados = {}
@@ -431,7 +439,6 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
             else:
                 estado = "No pagado"
                 tag = "nopagado"
-
 
         tabla.insert(
             "",
@@ -532,10 +539,8 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
                     monto_pagado = 0,
                     descuento = 0,
                     condonacion = 0,
-                    fecha_pago = NULL,
-                    tipo_pago = NULL,
-                    status = 'Pendiente',
-                    usuario_id = NULL,
+                    tipo_pago = 'Cancelado',
+                    status = 'Cancelado',
                     recargo_hasta = NULL,
                     recargos = 0
                 WHERE estudiante_id = ?
@@ -984,7 +989,7 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
                     pago_a_recargo = min(pago, recargo_pendiente)
                     
                     condonacion = min(monto_input, restante) 
-                    total_hoy = 0.00
+                    total_hoy = restante - condonacion
                     nuevo_restante = restante - condonacion
 
                 elif tipo == "Descuento extra":
@@ -992,7 +997,7 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
                     pago_a_recargo = min(pago, recargo_pendiente)
                     
                     descuento = min(monto_input, restante)
-                    total_hoy = 0.00
+                    total_hoy = restante - descuento
                     nuevo_restante = restante - descuento 
 
                 
@@ -1240,15 +1245,35 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
                 # DATOS ACTUALES BD
                 # ===============================
                 cur.execute("""
-                    SELECT monto_pagado, condonacion, descuento, recargo_hasta, recargos
+                    SELECT
+                        id,
+                        monto_pagado,
+                        condonacion,
+                        descuento,
+                        recargo_hasta,
+                        recargos
                     FROM Pagos
-                    WHERE estudiante_id=? AND ciclo_id=? AND cargo_id=?
+                    WHERE estudiante_id = ?
+                    AND ciclo_id = ?
+                    AND cargo_id = ?
+                    AND COALESCE(status, 'Pendiente') <> 'Cancelado'
+                    ORDER BY id DESC
+                    LIMIT 1
                 """, (alumno_id, ciclo_activo["id"], cargo_id))
 
                 row = cur.fetchone()
+
                 if row:
-                    monto_pagado_bd, condonacion_bd, descuento_bd, recargo_hasta_bd, recargos_bd = row
+                    (
+                        pago_id_existente,
+                        monto_pagado_bd,
+                        condonacion_bd,
+                        descuento_bd,
+                        recargo_hasta_bd,
+                        recargos_bd
+                    ) = row
                 else:
+                    pago_id_existente = None
                     monto_pagado_bd = 0.0
                     condonacion_bd = 0.0
                     descuento_bd = 0.0
@@ -1284,18 +1309,22 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
                         recargos_pagados = recargos_bd
                         dias_pagados = 0
                         recargo_hasta = None
+                        monto_pagado_nuevo = monto_total - condonacion_nueva
                     elif condonacion_nueva <= monto_total and recargos_bd != 0:
                         recargos_pagados = recargos_bd
                         dias_pagados = 0
+                        monto_pagado_nuevo = monto_total + recargos_bd - condonacion_nueva
 
                 if descuento_ui:
                     if descuento_nuevo <= monto_total and recargos_bd == 0:
                         recargos_pagados = recargos_bd
                         dias_pagados = 0
                         recargo_hasta = None
+                        monto_pagado_nuevo = monto_total - descuento_nuevo
                     elif descuento_nuevo <= monto_total and recargos_bd != 0:
                         recargos_pagados = recargos_bd
                         dias_pagados = 0
+                        monto_pagado_nuevo = monto_total + recargos_bd - descuento_nuevo
 
                 # ===============================
                 # CALCULAR DÍAS DE RECARGO PAGADOS
@@ -1341,65 +1370,85 @@ def mostrar_pago_alumno(parent, alumno_id, ciclo_activo, usuario_id):
                 # ===============================
                 # INSERT / UPDATE
                 # ===============================
-                cur.execute("""
-                    INSERT INTO Pagos (
-                        estudiante_id,
-                        ciclo_id,
-                        cargo_id,
-                        monto,
-                        monto_pagado,
-                        condonacion,
-                        descuento,
+
+                if row:
+                    # Existe un pago vigente: actualizar ese registro
+                    cur.execute("""
+                        UPDATE Pagos
+                        SET
+                            monto = ?,
+                            monto_pagado = ?,
+                            condonacion = ?,
+                            descuento = ?,
+                            fecha_pago = ?,
+                            tipo_pago = ?,
+                            status = ?,
+                            usuario_id = ?,
+                            recargos = ?,
+                            recargo_hasta = ?
+                        WHERE id = ?
+                    """, (
+                        monto_total2,
+                        monto_pagado_nuevo,
+                        condonacion_nueva,
+                        descuento_nuevo,
                         fecha_pago,
-                        tipo_pago,
+                        forma_var.get(),
                         status,
                         usuario_id,
-                        recargos,
+                        recargos_pagados,
+                        recargo_hasta,
+                        pago_id_existente
+                    ))
+
+                    pago_id = pago_id_existente
+
+                else:
+                    # No existe un pago vigente: crear uno nuevo.
+                    # Los registros anteriores Cancelados se conservan.
+                    cur.execute("""
+                        INSERT INTO Pagos (
+                            estudiante_id,
+                            ciclo_id,
+                            cargo_id,
+                            monto,
+                            monto_pagado,
+                            condonacion,
+                            descuento,
+                            fecha_pago,
+                            tipo_pago,
+                            status,
+                            usuario_id,
+                            recargos,
+                            recargo_hasta
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        alumno_id,
+                        ciclo_activo["id"],
+                        cargo_id,
+                        monto_total2,
+                        monto_pagado_nuevo,
+                        condonacion_nueva,
+                        descuento_nuevo,
+                        fecha_pago,
+                        forma_var.get(),
+                        status,
+                        usuario_id,
+                        recargos_pagados,
                         recargo_hasta
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(estudiante_id, ciclo_id, cargo_id)
-                    DO UPDATE SET
-                        monto_pagado = excluded.monto_pagado,
-                        condonacion = excluded.condonacion,
-                        descuento = excluded.descuento,
-                        fecha_pago = excluded.fecha_pago,
-                        tipo_pago = excluded.tipo_pago,
-                        status = excluded.status,
-                        usuario_id = excluded.usuario_id,
-                        recargos = excluded.recargos,
-                        recargo_hasta = excluded.recargo_hasta
-                """, (
-                    alumno_id,
-                    ciclo_activo["id"],
-                    cargo_id,
-                    monto_total2,
-                    monto_pagado_nuevo,
-                    condonacion_nueva,
-                    descuento_nuevo,
-                    fecha_pago,
-                    forma_var.get(),
-                    status,
-                    usuario_id,
-                    recargos_pagados,
-                    recargo_hasta
-                ))
+                    ))
 
+                    # Recuperar el ID exacto del registro recién creado
+                    pago_id = cur.lastrowid
 
-                # Obtener ID del pago recién registrado
-                cur.execute("""
-                    SELECT id
-                    FROM Pagos
-                    WHERE estudiante_id=? AND ciclo_id=? AND cargo_id=?
-                """, (alumno_id, ciclo_activo["id"], cargo_id))
-
-                pago_id = cur.fetchone()[0]
                 pagos_ids.append(pago_id)
 
             conn.commit()
             conn.close()
 
             if imprimir_var.get() and pagos_ids:
+                        
                 imprimir_ticket_pago(pagos_ids, usuario_id)
                 #previsualizar_ticket(parent, pagos_ids, usuario_id)
                 #return   # ⬅️ NO cierres aún la ventana

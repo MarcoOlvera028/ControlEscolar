@@ -268,17 +268,15 @@ def generar_pdf_estado_cuenta_en_memoria(alumno_id, fecha_corte, formato, ciclo_
                 (c.monto + IFNULL(p.recargos, 0)),
                 IFNULL(p.descuento, 0),
                 IFNULL(p.condonacion, 0),
-                (c.monto + IFNULL(p.recargos, 0) - IFNULL(p.descuento, 0) - IFNULL(p.condonacion, 0)),
                 (IFNULL(p.monto_pagado, 0) + IFNULL(p.recargos, 0))
             FROM Cargos c
             LEFT JOIN Pagos p
                 ON p.cargo_id = c.id
                 AND p.estudiante_id = ?
             WHERE c.ciclo_id = ?
-              AND c.fecha_inicio <= ?
-              AND (p.fecha_pago IS NULL OR p.fecha_pago <= ?)
+              AND p.fecha_pago <= ?
             ORDER BY c.fecha_inicio
-        """, (alumno_id, ciclo_id, fecha_corte, fecha_corte))
+        """, (alumno_id, ciclo_id, fecha_corte))
 
         rows = cur.fetchall()
         if not rows:
@@ -303,13 +301,12 @@ def generar_pdf_estado_cuenta_en_memoria(alumno_id, fecha_corte, formato, ciclo_
             "Total cargo",
             "Descuento",
             "Condonación",
-            "Pagos",
-            "Total"
+            "Total Pagado"
         ]
 
         filas = []
         for r in rows:
-            pagos = r[8]
+            pagos = r[7]
             filas.append([
                 r[0],
                 r[1],
@@ -318,7 +315,6 @@ def generar_pdf_estado_cuenta_en_memoria(alumno_id, fecha_corte, formato, ciclo_
                 f"${r[4]:,.2f}",
                 f"${r[5]:,.2f}",
                 f"${r[6]:,.2f}",
-                f"${r[7]:,.2f}",
                 f"${pagos:,.2f}"
             ])
 
@@ -915,10 +911,11 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
             d.grupo,
             c.concepto,
             p.fecha_pago,
-            p.monto_pagado,
+            p.monto,
             IFNULL(p.descuento, 0),
             IFNULL(p.condonacion, 0),
-            IFNULL(p.recargos, 0)
+            IFNULL(p.recargos, 0),
+            p.tipo_pago
         FROM Pagos p
         JOIN usuarios u ON u.id = p.usuario_id
         JOIN Estudiantes e ON e.id = p.estudiante_id
@@ -929,7 +926,7 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
         WHERE p.fecha_pago BETWEEN ? AND ?
         {where_ciclo}
         AND d.grupo IN ({placeholders})
-        ORDER BY u.usuario, alumno, c.concepto, p.fecha_pago
+        ORDER BY u.usuario, p.fecha_pago, p.id, c.concepto, alumno
     """, params)
 
     rows = cur.fetchall()
@@ -943,8 +940,11 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
     # ===============================
     data = {}
 
-    for id, usuario, alumno, grupo, concepto, fecha, imp, desc, cond, rec in rows:
-        total = imp + rec
+    for id, usuario, alumno, grupo, concepto, fecha, imp, desc, cond, rec , tipo in rows:
+        total = imp + rec - desc - cond 
+        if tipo == 'Cancelado':
+            imp = 0
+            total = 0
 
         data.setdefault(usuario, []).append({
             "folio": id,
@@ -956,7 +956,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
             "descuento": desc,
             "condonacion": cond,
             "recargos": rec,
-            "total": total
+            "total": total,
+            "tipo": tipo
         })
 
     # ===============================
@@ -976,8 +977,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
     # ---------- DETALLE: USUARIO ----------
     if detalle == "usuario":
         encabezado = [
-            "Usuario", "Importe", "Descuentos",
-            "Condonación", "Recargos", "Total"
+            "Usuario", "Importe", "Descuentos", "Condonado",
+            "Recargos", "Total", "Método"
         ]
 
         for usuario, items in data.items():
@@ -993,7 +994,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
                 money(sub_des),
                 money(sub_con),
                 money(sub_rec),
-                money(sub_tot)
+                money(sub_tot),
+                tipo
             ])
 
             total_importe += sub_imp
@@ -1006,8 +1008,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
     elif detalle == "usuario + alumnos":
         encabezado = [
             "Usuario", "Alumno", "Grupo",
-            "Importe", "Descuentos",
-            "Condonación", "Recargos", "Total"
+            "Importe", "Descuentos", "Condonado",
+            "Recargos", "Total", "Método"
         ]
 
         for usuario, items in data.items():
@@ -1018,13 +1020,14 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
             for i in items:
                 filas.append([
                     "",
-                    i["alumno"],
+                    P(i["alumno"]),
                     i["grupo"],
                     money(i["importe"]),
                     money(i["descuento"]),
                     money(i["condonacion"]),
                     money(i["recargos"]),
-                    money(i["total"])
+                    money(i["total"]),
+                    i["tipo"]
                 ])
 
                 sub_imp += i["importe"]
@@ -1043,7 +1046,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
                 money(sub_des),
                 money(sub_con),
                 money(sub_rec),
-                money(sub_tot)
+                money(sub_tot),
+                ""
             ])
 
             total_importe += sub_imp
@@ -1057,8 +1061,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
         encabezado = [
             "Usuario", "Folio", "Concepto", 
             "Fecha", "Alumno", "Grupo",
-            "Importe", "Dto.",
-            "Condonación", "Recargos", "Total"
+            "Importe", "Dto.", "Cond.",
+            "Recargos", "Total", "Método"
         ]
 
         for usuario, items in data.items():
@@ -1078,7 +1082,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
                     money(i["descuento"]),
                     money(i["condonacion"]),
                     money(i["recargos"]),
-                    money(i["total"])
+                    money(i["total"]),
+                    i["tipo"]
                 ])
 
                 sub_imp += i["importe"]
@@ -1100,7 +1105,8 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
                 money(sub_des),
                 money(sub_con),
                 money(sub_rec),
-                money(sub_tot)
+                money(sub_tot),
+                ""
             ])
 
             total_importe += sub_imp
@@ -1108,6 +1114,69 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
             total_cond += sub_con
             total_rec += sub_rec
             total_gen += sub_tot
+
+    # ---------- DETALLE: FOLIO + ALUMNOS + CONCEPTO ----------
+    elif detalle == "folio + alumnos + concepto":
+        encabezado = [
+            "Folio", "Concepto",
+            "Fecha", "Alumno", "Grupo",
+            "Importe", "Dto.", "Cond.",
+            "Recargos", "Total", "Método"
+        ]
+
+        # Unir todos los registros de todos los usuarios
+        items = []
+
+        for usuario, registros in data.items():
+            items.extend(registros)
+
+        # Ordenar por Folio
+        items.sort(key=lambda x: x["folio"])
+
+        sub_imp = sub_des = sub_con = sub_rec = sub_tot = 0
+
+        for i in items:
+            filas.append([
+                i["folio"],
+                P(i["concepto"]),
+                i["fecha"],
+                P(i["alumno"]),
+                i["grupo"],
+                money(i["importe"]),
+                money(i["descuento"]),
+                money(i["condonacion"]),
+                money(i["recargos"]),
+                money(i["total"]),
+                i["tipo"]
+            ])
+
+            sub_imp += i["importe"]
+            sub_des += i["descuento"]
+            sub_con += i["condonacion"]
+            sub_rec += i["recargos"]
+            sub_tot += i["total"]
+
+        subtotales_idx.append(len(filas) + 1)
+
+        filas.append([
+            "SUBTOTAL",
+            "",
+            "",
+            "",
+            "",
+            money(sub_imp),
+            money(sub_des),
+            money(sub_con),
+            money(sub_rec),
+            money(sub_tot),
+            ""
+        ])
+
+        total_importe += sub_imp
+        total_desc += sub_des
+        total_cond += sub_con
+        total_rec += sub_rec
+        total_gen += sub_tot
 
     # ===============================
     # TOTAL GENERAL (alineado correcto)
@@ -1146,6 +1215,15 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
             money(total_gen),
         ]
 
+    elif detalle == "folio + alumnos + concepto":
+            total_row[5:] = [
+                money(total_importe),
+                money(total_desc),
+                money(total_cond),
+                money(total_rec),
+                money(total_gen),
+            ]
+
     filas.append(total_row)
 
     # ===============================
@@ -1162,23 +1240,73 @@ def generar_pdf_pagos_en_memoria(fecha_inicio, fecha_fin, grupos, ciclo_modo, ci
         bottomMargin=2 * cm
     )
 
-    tabla = Table(
-        [encabezado] + filas,
-        repeatRows=1,
-        colWidths = [
-            2.5*cm,   # Usuario
-            1.7*cm,   # Folio
-            4.5*cm,   # Concepto
-            1.7*cm, # Fecha
-            3*cm,   # Alumno
-            1.7*cm,   # Grupo
-            1.7*cm,   # Importe
-            1.7*cm,   # Dto
-            1.9*cm,   # Condonación
-            1.7*cm,   # Recargos
-            2*cm  # Total
-        ]
-    )
+
+    if detalle == "usuario":
+        tabla = Table(
+                [encabezado] + filas,
+                repeatRows=1,
+                colWidths = [
+                    2.5*cm,   # Usuario
+                    1.7*cm,   # Importe
+                    1.7*cm,   # Dto
+                    1.7*cm,   # Recargos
+                    2*cm,  # Total
+                    1.9*cm   #Método
+                ]
+            )
+
+    elif detalle == "usuario + alumnos":
+        tabla = Table(
+                [encabezado] + filas,
+                repeatRows=1,
+                colWidths = [
+                    2.5*cm,   # Usuario
+                    3*cm,   # Alumno
+                    1.7*cm,   # Grupo
+                    1.7*cm,   # Importe
+                    1.7*cm,   # Dto
+                    1.7*cm,   # Recargos
+                    2*cm,  # Total
+                    1.9*cm   #Método
+                ]
+            )
+
+    elif detalle == "usuario + alumnos + concepto":
+        tabla = Table(
+                [encabezado] + filas,
+                repeatRows=1,
+                colWidths = [
+                    2.5*cm,   # Usuario
+                    1.7*cm,   # Folio
+                    4.5*cm,   # Concepto
+                    1.7*cm, # Fecha
+                    3*cm,   # Alumno
+                    1.7*cm,   # Grupo
+                    1.7*cm,   # Importe
+                    1.7*cm,   # Dto
+                    1.7*cm,   # Recargos
+                    2*cm,  # Total
+                    1.9*cm   #Método
+                ]
+            )
+
+    elif detalle == "folio + alumnos + concepto":
+            tabla = Table(
+                    [encabezado] + filas,
+                    repeatRows=1,
+                    colWidths = [
+                        2.5*cm,   # Folio
+                        4.5*cm,   # Concepto
+                        1.7*cm, # Fecha
+                        3*cm,   # Alumno
+                        1.7*cm,   # Grupo
+                        1.7*cm,   # Importe
+                        1.7*cm,   # Dto
+                        1.7*cm,   # Recargos
+                        2*cm,  # Total
+                        1.9*cm   #Método
+                    ]
+                )
 
     style = TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e0e0e0")),

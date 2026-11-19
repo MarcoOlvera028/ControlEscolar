@@ -37,6 +37,7 @@ def obtener_datos_pagos(pagos_ids, usuario_id):
         SELECT
             p.id,
             p.monto_pagado,
+            p.recargos,
             c.concepto,
             p.tipo_pago,
             e.matricula AS matricula,
@@ -45,26 +46,29 @@ def obtener_datos_pagos(pagos_ids, usuario_id):
             es.nombre AS escuela,
             es.RFC,
             es.logo,
-            u.usuario
+            u.nombre AS usuario,
+            p.fecha_pago
         FROM Pagos p
         JOIN Estudiantes e ON e.id = p.estudiante_id
         JOIN DatosEscolares d
             ON d.estudiante_id = e.id
             AND d.ciclo_id = p.ciclo_id
+        JOIN usuarios u
+            ON u.id = p.usuario_id
         JOIN Cargos c ON c.id = p.cargo_id
-        JOIN usuarios u ON u.id = ?
         JOIN Escuela es ON es.id = (
             SELECT valor FROM configuracion WHERE clave = 'ultima_escuela'
         )
         WHERE p.id IN ({placeholders})
         ORDER BY p.id
-    """, (usuario_id, *pagos_ids))
+    """, tuple(pagos_ids))
 
     rows = cur.fetchall()
     conn.close()
 
     if not rows:
         raise ValueError("Pagos no encontrados")
+
 
     return rows
 
@@ -79,6 +83,7 @@ def generar_texto_ticket_pago(pagos_ids, usuario_id):
         pago_id,
         _,
         _,
+        _,
         tipo_pago,
         matricula,
         alumno,
@@ -86,17 +91,17 @@ def generar_texto_ticket_pago(pagos_ids, usuario_id):
         escuela,
         rfc,
         logo,
-        usuario
+        usuario,
+        fecha_impresion
     ) = rows[0]
 
-    fecha_impresion = datetime.now().strftime("%d/%m/%Y %H:%M")
     ancho = 32
 
     ticket = [
         escuela.center(ancho),
         rfc.center(ancho),
         fecha_impresion.center(ancho),
-        f"N° {pago_id:<8} Usuario: {usuario}",
+        f"N° {', '.join(map(str, pagos_ids))} Usuario: {usuario}",
         "",
         "",
         "",
@@ -107,13 +112,14 @@ def generar_texto_ticket_pago(pagos_ids, usuario_id):
         "",
         "",
         "",
-        "Ct  Concepto                    Total"
+        "   Concepto                    Total"
     ]
 
     total = 0.0
-    for i, (_, monto, concepto, *_rest) in enumerate(rows, start=1):
-        total += monto
-        ticket.append(f"{i:<3} {concepto[:24]:24}   ${monto:,.2f}")
+    for _, monto, recargos, concepto, *_rest in rows:
+        total += monto + recargos
+        monto = monto + recargos
+        ticket.append(f"{   concepto[:24]:24}   ${monto:,.2f}")
 
     ticket.extend([
         "",
@@ -131,7 +137,7 @@ def generar_texto_ticket_pago(pagos_ids, usuario_id):
 # =====================================================
 def imprimir_ticket_pago(pagos_ids, usuario_id):
     rows = obtener_datos_pagos(pagos_ids, usuario_id)
-    logo = rows[0][9]  # es.logo
+    logo = rows[0][10]  # es.logo
 
     p = Win32Raw(NOMBRE_IMPRESORA)
 
@@ -166,6 +172,7 @@ def construir_ticket_modelo(pagos_ids, usuario_id):
         pago_id,
         _,
         _,
+        _,
         tipo_pago,
         matricula,
         alumno,
@@ -173,10 +180,10 @@ def construir_ticket_modelo(pagos_ids, usuario_id):
         escuela,
         rfc,
         logo,
-        usuario
+        usuario,
+        fecha_impresion
     ) = rows[0]
 
-    fecha_impresion = datetime.now().strftime("%d/%m/%Y %H:%M")
     ancho = 32
 
     bloques = []
@@ -193,7 +200,7 @@ def construir_ticket_modelo(pagos_ids, usuario_id):
         escuela.center(ancho),
         rfc.center(ancho),
         fecha_impresion.center(ancho),
-        f"N° {pago_id:<8} Usuario: {usuario}"
+        f"N° {', '.join(map(str, pagos_ids))} Usuario: {usuario}"
     ]
 
     bloques.append({
@@ -210,13 +217,14 @@ def construir_ticket_modelo(pagos_ids, usuario_id):
         f"Matrícula: {matricula}",
         f"Forma: {tipo_pago}",
         "",
-        "Ct  Concepto                    Total"
+        "   Concepto                    Total"
     ]
 
     total = 0.0
-    for i, (_, monto, concepto, *_rest) in enumerate(rows, start=1):
-        total += monto
-        cuerpo.append(f"{i:<3} {concepto[:24]:24}   ${monto:,.2f}")
+    for _, monto, recargos, concepto, *_rest in rows:
+        total += monto + recargos
+        monto = monto + recargos
+        cuerpo.append(f"   {concepto[:24]:24}   ${monto:,.2f}")
 
     cuerpo.extend([
         "",

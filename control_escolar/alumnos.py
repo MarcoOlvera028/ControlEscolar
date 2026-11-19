@@ -121,7 +121,7 @@ def mostrar_alumnos(contenido, ciclo_activo):
                     E.id
                 FROM Estudiantes E
                 INNER JOIN DatosEscolares D
-                        ON D.estudiante_id = E.matricula
+                        ON D.estudiante_id = E.id
                     AND D.ciclo_id = ?
                 WHERE E.nombre LIKE ?
                 OR E.apellido_paterno LIKE ?

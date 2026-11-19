@@ -148,6 +148,7 @@ def mostrar_pagos_del_alumno(parent, alumno_id, ciclo_activo, usuario_id):
             c.concepto,
             p.fecha_pago,
             p.monto_pagado,
+            p.recargos,
             p.status
         FROM Pagos p
         JOIN Cargos c ON c.id = p.cargo_id
@@ -159,7 +160,7 @@ def mostrar_pagos_del_alumno(parent, alumno_id, ciclo_activo, usuario_id):
 
     seleccionados = {}
 
-    for pago_id, concepto, fecha_pago, monto_pagado, status in pagos:
+    for pago_id, concepto, fecha_pago, monto_pagado, recargos, status in pagos:
 
         if status == "Pagado":
             tag = "pagado"
@@ -167,6 +168,8 @@ def mostrar_pagos_del_alumno(parent, alumno_id, ciclo_activo, usuario_id):
             tag = "siguiente"
         else:
             tag = "nopagado"
+
+        monto_pagado += recargos
 
         tabla.insert(
             "",
@@ -224,9 +227,9 @@ def mostrar_pagos_del_alumno(parent, alumno_id, ciclo_activo, usuario_id):
                 "Debe seleccionar al menos un pago."
             )
             return
-
         imprimir_ticket_pago(pagos_ids, usuario_id)
         #previsualizar_ticket(parent, pagos_ids, usuario_id)
+        #return
     
 
     
